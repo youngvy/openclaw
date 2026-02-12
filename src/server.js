@@ -875,6 +875,9 @@ app.get("/setup/export", requireSetupAuth, async (_req, res) => {
   stream.pipe(res);
 });
 
+// Serve Openclaw media (browser screenshots, etc.) before proxy so /media/* is not swallowed by Control UI SPA
+app.use("/media", express.static(path.join(STATE_DIR, "media")));
+
 // Proxy everything else to the gateway.
 const proxy = httpProxy.createProxyServer({
   target: GATEWAY_TARGET,
