@@ -56,7 +56,29 @@ RUN apt-get update \
     python3 \
     pkg-config \
     sudo \
+    chromium \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgdk-pixbuf2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    xdg-utils \
+    libgbm1 \
+    libasound2 \
   && rm -rf /var/lib/apt/lists/*
+
+# Chromium for Openclaw browser automation (Managed Browser mode)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install Homebrew (must run as non-root user)
 # Create a user for Homebrew installation, install it, then make it accessible to all users
