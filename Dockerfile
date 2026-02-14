@@ -78,22 +78,11 @@ RUN apt-get update \
     fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 
-# Chromium wrapper with container-safe flags for Railway/Docker environments
+# Chromium wrapper — adds ONLY container-specific flags that OpenClaw doesn't handle.
+# OpenClaw manages --headless and --no-sandbox via its own config; we add the rest.
 RUN printf '%s\n' \
   '#!/bin/bash' \
-  'exec /usr/bin/chromium \' \
-  '  --no-sandbox \' \
-  '  --disable-setuid-sandbox \' \
-  '  --disable-dev-shm-usage \' \
-  '  --disable-gpu \' \
-  '  --headless=new \' \
-  '  --disable-software-rasterizer \' \
-  '  --disable-extensions \' \
-  '  --no-first-run \' \
-  '  --no-default-browser-check \' \
-  '  --disable-background-networking \' \
-  '  --disable-features=VizDisplayCompositor \' \
-  '  "$@"' \
+  'exec /usr/bin/chromium --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --disable-features=VizDisplayCompositor "$@"' \
   > /usr/local/bin/chromium-wrapper \
   && chmod +x /usr/local/bin/chromium-wrapper
 

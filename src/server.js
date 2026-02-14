@@ -773,6 +773,107 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   }
 });
 
+app.get("/setup/api/browser-test", requireSetupAuth, async (_req, res) => {
+  const results = {};
+
+  // 1. Check if chromium-wrapper exists
+  const whichWrapper = await runCmd("ls", ["-la", "/usr/local/bin/chromium-wrapper"]);
+  results.wrapperExists = { code: whichWrapper.code, output: whichWrapper.output.trim() };
+
+  // 2. Print wrapper script content
+  const wrapperContent = await runCmd("cat", ["/usr/local/bin/chromium-wrapper"]);
+  results.wrapperContent = wrapperContent.output.trim();
+
+  // 3. Check chromium binary
+  const whichChromium = await runCmd("which", ["chromium"]);
+  results.chromiumPath = whichChromium.output.trim();
+
+  // 4. Test chromium --version via wrapper
+  const version = await runCmd("/usr/local/bin/chromium-wrapper", ["--version"]);
+  results.chromiumVersion = { code: version.code, output: version.output.trim() };
+
+  // 5. Test chromium --version directly (no wrapper)
+  const versionDirect = await runCmd("/usr/bin/chromium", ["--no-sandbox", "--version"]);
+  results.chromiumVersionDirect = { code: versionDirect.code, output: versionDirect.output.trim() };
+
+  // 6. Test headless page load via wrapper
+  const headless = await runCmd("/usr/local/bin/chromium-wrapper", [
+    "--headless", "--no-sandbox", "--dump-dom", "--virtual-time-budget=5000", "about:blank",
+  ]);
+  results.headlessTest = {
+    code: headless.code,
+    output: headless.output.slice(0, 2000),
+  };
+
+  // 7. Test CDP launch (start chromium with remote-debugging, check if port opens, then kill)
+  const cdpTest = await new Promise((resolve) => {
+    const proc = childProcess.spawn("/usr/local/bin/chromium-wrapper", [
+      "--headless", "--no-sandbox", "--remote-debugging-port=19999",
+      "--remote-debugging-address=127.0.0.1", "about:blank",
+    ]);
+    let output = "";
+    proc.stderr?.on("data", (d) => (output += d.toString()));
+    proc.stdout?.on("data", (d) => (output += d.toString()));
+
+    let resolved = false;
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        proc.kill("SIGKILL");
+        resolve({ ok: false, error: "CDP launch timed out after 10s", output: output.slice(0, 2000) });
+      }
+    }, 10_000);
+
+    // Poll for CDP readiness
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch("http://127.0.0.1:19999/json/version");
+        if (r.ok) {
+          clearInterval(poll);
+          clearTimeout(timeout);
+          if (!resolved) {
+            resolved = true;
+            const json = await r.json();
+            proc.kill("SIGKILL");
+            resolve({ ok: true, cdpResponse: json, output: output.slice(0, 500) });
+          }
+        }
+      } catch {
+        // not ready yet
+      }
+    }, 500);
+
+    proc.on("exit", (code) => {
+      clearInterval(poll);
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        resolve({ ok: false, error: `Chromium exited with code ${code}`, output: output.slice(0, 2000) });
+      }
+    });
+  });
+  results.cdpTest = cdpTest;
+
+  // 8. Check browser config in openclaw.json
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath(), "utf8"));
+    results.browserConfig = config?.browser || null;
+    results.browserSkill = config?.skills?.entries?.browser || null;
+  } catch (err) {
+    results.browserConfig = `Error: ${err.message}`;
+  }
+
+  // 9. Check memory
+  const mem = await runCmd("free", ["-m"]);
+  results.memory = mem.output.trim();
+
+  // 10. Check /dev/shm
+  const shm = await runCmd("df", ["-h", "/dev/shm"]);
+  results.devShm = shm.output.trim();
+
+  res.json(results);
+});
+
 app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
   const v = await runCmd(OPENCLAW_NODE, clawArgs(["--version"]));
   const help = await runCmd(
