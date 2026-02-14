@@ -200,7 +200,6 @@ async function startGateway() {
   // See: https://docs.openclaw.ai/tools/browser-linux-troubleshooting
   const chromiumWrapper = "/usr/local/bin/chromium-wrapper";
   const browserCdpPort = 18800;
-  const browserDataDir = path.join(STATE_DIR, "browser", "openclaw", "user-data");
 
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "browser.executablePath", chromiumWrapper]));
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "browser.attachOnly", "true"]));
@@ -210,25 +209,34 @@ async function startGateway() {
   try { childProcess.execSync("pkill -f 'chromium.*remote-debugging'", { stdio: "ignore" }); } catch {}
   await sleep(500);
 
-  // Pre-launch Chromium with CDP on the configured port
+  // Clean stale Chromium lock files that prevent startup
+  const browserDataDir = path.join(STATE_DIR, "browser", "openclaw", "user-data");
   fs.mkdirSync(browserDataDir, { recursive: true });
+  for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+    try { fs.rmSync(path.join(browserDataDir, lock), { force: true }); } catch {}
+  }
+
+  // Pre-launch Chromium with CDP — match the diagnostic test setup that proven to work.
+  // Key: no --user-data-dir (avoids lock issues), --headless=new (stable in Chromium 144+),
+  // no custom DBUS env vars (they cause parse errors).
   const chromiumProc = childProcess.spawn(chromiumWrapper, [
-    "--headless",
+    "--headless=new",
     "--no-sandbox",
     `--remote-debugging-port=${browserCdpPort}`,
     "--remote-debugging-address=127.0.0.1",
-    `--user-data-dir=${browserDataDir}`,
     "about:blank",
   ], {
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],  // capture stderr for debugging
     detached: true,
-    env: {
-      ...process.env,
-      DBUS_SESSION_BUS_ADDRESS: "disabled:",
-      DBUS_SYSTEM_BUS_ADDRESS: "disabled:",
-    },
   });
   chromiumProc.unref();
+
+  // Capture stderr for debugging (first 2KB)
+  let chromiumStderr = "";
+  chromiumProc.stderr?.on("data", (d) => {
+    if (chromiumStderr.length < 2000) chromiumStderr += d.toString();
+  });
+
   console.log(`[gateway] Pre-launched Chromium (PID ${chromiumProc.pid}) with CDP on port ${browserCdpPort}`);
 
   // Wait for CDP to become ready
@@ -239,7 +247,7 @@ async function startGateway() {
       const r = await fetch(`http://127.0.0.1:${browserCdpPort}/json/version`);
       if (r.ok) {
         const info = await r.json();
-        console.log(`[gateway] Chromium CDP ready: ${info.Browser}`);
+        console.log(`[gateway] ✓ Chromium CDP ready in ${Date.now() - cdpStart}ms: ${info.Browser}`);
         cdpReady = true;
         break;
       }
@@ -247,7 +255,11 @@ async function startGateway() {
     await sleep(500);
   }
   if (!cdpReady) {
-    console.error(`[gateway] WARNING: Chromium CDP not ready after 15s on port ${browserCdpPort}`);
+    console.error(`[gateway] ✗ Chromium CDP not ready after 15s on port ${browserCdpPort}`);
+    console.error(`[gateway] Chromium stderr: ${chromiumStderr || "(empty)"}`);
+    // Check if process is still alive
+    try { process.kill(chromiumProc.pid, 0); console.error("[gateway] Chromium process is still alive"); }
+    catch { console.error("[gateway] Chromium process has EXITED"); }
   }
 
   const args = [
@@ -269,9 +281,6 @@ async function startGateway() {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      // Disable D-Bus entirely so Chromium doesn't waste time trying to connect
-      DBUS_SESSION_BUS_ADDRESS: "disabled:",
-      DBUS_SYSTEM_BUS_ADDRESS: "disabled:",
     },
   });
 
