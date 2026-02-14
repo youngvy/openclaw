@@ -188,6 +188,11 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
+  // Ensure browser uses our container-safe chromium-wrapper (adds --disable-dev-shm-usage etc.)
+  const chromiumWrapper = "/usr/local/bin/chromium-wrapper";
+  console.log(`[gateway] Syncing browser.executablePath → ${chromiumWrapper}`);
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "browser.executablePath", chromiumWrapper]));
+
   const args = [
     "gateway",
     "run",
