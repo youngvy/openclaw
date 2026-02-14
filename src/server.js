@@ -193,6 +193,21 @@ async function startGateway() {
   console.log(`[gateway] Syncing browser.executablePath → ${chromiumWrapper}`);
   await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "browser.executablePath", chromiumWrapper]));
 
+  // Tell gateway that our wrapper proxy (127.0.0.1) is trusted, so connections
+  // are treated as local. Without this, browser control service may reject tool requests.
+  await runCmd(OPENCLAW_NODE, clawArgs([
+    "config", "set", "--json", "gateway.trustedProxies", '["127.0.0.1"]',
+  ]));
+  console.log(`[gateway] Set gateway.trustedProxies → ["127.0.0.1"]`);
+
+  // Start D-Bus daemon (Chromium and some services need it)
+  try {
+    childProcess.execSync("mkdir -p /run/dbus && dbus-daemon --system --fork", { stdio: "ignore" });
+    console.log("[gateway] D-Bus system daemon started");
+  } catch (err) {
+    console.warn(`[gateway] D-Bus start failed (non-fatal): ${err.message}`);
+  }
+
   const args = [
     "gateway",
     "run",
