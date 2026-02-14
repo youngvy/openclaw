@@ -188,11 +188,6 @@ async function startGateway() {
 
   console.log(`[gateway] ========== TOKEN SYNC COMPLETE ==========`);
 
-  // Ensure browser uses our container-safe chromium-wrapper (adds --disable-dev-shm-usage etc.)
-  const chromiumWrapper = "/usr/local/bin/chromium-wrapper";
-  console.log(`[gateway] Syncing browser.executablePath → ${chromiumWrapper}`);
-  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "browser.executablePath", chromiumWrapper]));
-
   // Tell gateway that our wrapper proxy (127.0.0.1) is trusted, so connections
   // are treated as local. Without this, browser control service may reject tool requests.
   await runCmd(OPENCLAW_NODE, clawArgs([
@@ -200,12 +195,59 @@ async function startGateway() {
   ]));
   console.log(`[gateway] Set gateway.trustedProxies → ["127.0.0.1"]`);
 
-  // Start D-Bus daemon (Chromium and some services need it)
-  try {
-    childProcess.execSync("mkdir -p /run/dbus && dbus-daemon --system --fork", { stdio: "ignore" });
-    console.log("[gateway] D-Bus system daemon started");
-  } catch (err) {
-    console.warn(`[gateway] D-Bus start failed (non-fatal): ${err.message}`);
+  // Use attachOnly mode: we pre-launch Chromium ourselves (proven to work via CDP test),
+  // then OpenClaw attaches to it instead of trying to launch it internally.
+  // See: https://docs.openclaw.ai/tools/browser-linux-troubleshooting
+  const chromiumWrapper = "/usr/local/bin/chromium-wrapper";
+  const browserCdpPort = 18800;
+  const browserDataDir = path.join(STATE_DIR, "browser", "openclaw", "user-data");
+
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "browser.executablePath", chromiumWrapper]));
+  await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "browser.attachOnly", "true"]));
+  console.log(`[gateway] Set browser.attachOnly → true`);
+
+  // Kill any leftover Chromium processes from previous runs
+  try { childProcess.execSync("pkill -f 'chromium.*remote-debugging'", { stdio: "ignore" }); } catch {}
+  await sleep(500);
+
+  // Pre-launch Chromium with CDP on the configured port
+  fs.mkdirSync(browserDataDir, { recursive: true });
+  const chromiumProc = childProcess.spawn(chromiumWrapper, [
+    "--headless",
+    "--no-sandbox",
+    `--remote-debugging-port=${browserCdpPort}`,
+    "--remote-debugging-address=127.0.0.1",
+    `--user-data-dir=${browserDataDir}`,
+    "about:blank",
+  ], {
+    stdio: "ignore",
+    detached: true,
+    env: {
+      ...process.env,
+      DBUS_SESSION_BUS_ADDRESS: "disabled:",
+      DBUS_SYSTEM_BUS_ADDRESS: "disabled:",
+    },
+  });
+  chromiumProc.unref();
+  console.log(`[gateway] Pre-launched Chromium (PID ${chromiumProc.pid}) with CDP on port ${browserCdpPort}`);
+
+  // Wait for CDP to become ready
+  const cdpStart = Date.now();
+  let cdpReady = false;
+  while (Date.now() - cdpStart < 15_000) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${browserCdpPort}/json/version`);
+      if (r.ok) {
+        const info = await r.json();
+        console.log(`[gateway] Chromium CDP ready: ${info.Browser}`);
+        cdpReady = true;
+        break;
+      }
+    } catch {}
+    await sleep(500);
+  }
+  if (!cdpReady) {
+    console.error(`[gateway] WARNING: Chromium CDP not ready after 15s on port ${browserCdpPort}`);
   }
 
   const args = [
@@ -227,6 +269,9 @@ async function startGateway() {
       ...process.env,
       OPENCLAW_STATE_DIR: STATE_DIR,
       OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
+      // Disable D-Bus entirely so Chromium doesn't waste time trying to connect
+      DBUS_SESSION_BUS_ADDRESS: "disabled:",
+      DBUS_SYSTEM_BUS_ADDRESS: "disabled:",
     },
   });
 
@@ -869,7 +914,55 @@ app.get("/setup/api/browser-test", requireSetupAuth, async (_req, res) => {
   });
   results.cdpTest = cdpTest;
 
-  // 8. Check browser config in openclaw.json
+  // 8. Test CDP on port 18800 (the actual cdpPort from OpenClaw config)
+  const cdpTest18800 = await new Promise((resolve) => {
+    const proc = childProcess.spawn("/usr/local/bin/chromium-wrapper", [
+      "--headless", "--no-sandbox", "--remote-debugging-port=18800",
+      "--remote-debugging-address=127.0.0.1", "about:blank",
+    ]);
+    let output = "";
+    proc.stderr?.on("data", (d) => (output += d.toString()));
+    proc.stdout?.on("data", (d) => (output += d.toString()));
+
+    let resolved = false;
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        proc.kill("SIGKILL");
+        resolve({ ok: false, error: "CDP on port 18800 timed out after 10s", output: output.slice(0, 2000) });
+      }
+    }, 10_000);
+
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch("http://127.0.0.1:18800/json/version");
+        if (r.ok) {
+          clearInterval(poll);
+          clearTimeout(timeout);
+          if (!resolved) {
+            resolved = true;
+            const json = await r.json();
+            proc.kill("SIGKILL");
+            resolve({ ok: true, cdpResponse: json, output: output.slice(0, 500) });
+          }
+        }
+      } catch {
+        // not ready yet
+      }
+    }, 500);
+
+    proc.on("exit", (code) => {
+      clearInterval(poll);
+      clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        resolve({ ok: false, error: `Chromium exited with code ${code}`, output: output.slice(0, 2000) });
+      }
+    });
+  });
+  results.cdpTestPort18800 = cdpTest18800;
+
+  // 9. Check browser config in openclaw.json
   try {
     const config = JSON.parse(fs.readFileSync(configPath(), "utf8"));
     results.browserConfig = config?.browser || null;
@@ -877,6 +970,20 @@ app.get("/setup/api/browser-test", requireSetupAuth, async (_req, res) => {
   } catch (err) {
     results.browserConfig = `Error: ${err.message}`;
   }
+
+  // 10. OpenClaw skills list
+  const skillsList = await runCmd(OPENCLAW_NODE, clawArgs(["skills", "list"]));
+  results.skillsList = { code: skillsList.code, output: skillsList.output.slice(0, 3000) };
+
+  // 11. Check if port 18800 is already in use (before our test)
+  const portCheck = await runCmd("ss", ["-tlnp"]);
+  results.listeningPorts = portCheck.output.trim();
+
+  // 12. Check running chromium processes
+  const chromiumProcs = await runCmd("ps", ["aux"]);
+  results.processes = chromiumProcs.output.split("\n").filter(
+    (l) => l.includes("chromium") || l.includes("chrome") || l.includes("browser") || l.includes("PID")
+  ).join("\n");
 
   // 9. Check memory
   const mem = await runCmd("free", ["-m"]);

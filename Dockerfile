@@ -86,11 +86,9 @@ RUN printf '%s\n' \
   > /usr/local/bin/chromium-wrapper \
   && chmod +x /usr/local/bin/chromium-wrapper
 
-# Chromium for Openclaw browser automation (Managed Browser mode)
+# Prevent bundled Chromium downloads (we use system chromium via wrapper)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-wrapper
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/chromium-wrapper
-ENV CHROME_PATH=/usr/local/bin/chromium-wrapper
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Install Homebrew (must run as non-root user)
 # Create a user for Homebrew installation, install it, then make it accessible to all users
