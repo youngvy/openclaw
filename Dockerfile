@@ -73,12 +73,24 @@ RUN apt-get update \
     xdg-utils \
     libgbm1 \
     libasound2 \
+    dbus \
+    dbus-x11 \
+    fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
+
+# Chromium wrapper with container-safe flags (--no-sandbox required for root,
+# --disable-dev-shm-usage avoids crashes due to small /dev/shm in containers)
+RUN printf '%s\n' \
+  '#!/bin/bash' \
+  'exec /usr/bin/chromium --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu "$@"' \
+  > /usr/local/bin/chromium-wrapper \
+  && chmod +x /usr/local/bin/chromium-wrapper
 
 # Chromium for Openclaw browser automation (Managed Browser mode)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-wrapper
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/chromium-wrapper
+ENV CHROME_PATH=/usr/local/bin/chromium-wrapper
 
 # Install Homebrew (must run as non-root user)
 # Create a user for Homebrew installation, install it, then make it accessible to all users
