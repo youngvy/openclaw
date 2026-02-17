@@ -38,7 +38,7 @@ RUN sed -i "s/parseQmdSessionScope(key)/parseQmdSessionScope(key ?? '')/g" ./src
 # Patch: fix --url option collision between browser parent command and cookies set subcommand.
 # browser inherits --url from addGatewayClientOptions which shadows cookies set's own --url;
 # enablePositionalOptions + passThroughOptions stops parent option parsing after subcommand name.
-RUN sed -i 's/\.command("browser")/\.command("browser").enablePositionalOptions().passThroughOptions()/' ./src/cli/browser-cli.ts
+RUN sed -i 's/\.command("browser")/\.command("browser").enablePositionalOptions()/' ./src/cli/browser-cli.ts
 
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
