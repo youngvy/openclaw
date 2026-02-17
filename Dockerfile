@@ -40,6 +40,11 @@ RUN sed -i 's/requiredOption("--url ",/requiredOption("--url <url>",/' ./src/cli
 
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
+
+# Ensure the fix is in the bundled CLI (tsdown may preserve or transform the string)
+RUN sed -i 's/requiredOption("--url ",/requiredOption("--url <url>",/g' ./dist/entry.js \
+  ; sed -i "s/requiredOption('--url ',/requiredOption('--url <url>',/g" ./dist/entry.js || true
+
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:install && pnpm ui:build
 
@@ -121,6 +126,9 @@ COPY --from=openclaw-build /openclaw /openclaw
 # Provide a openclaw executable
 RUN printf '%s\n' '#!/usr/bin/env bash' 'exec node /openclaw/dist/entry.js "$@"' > /usr/local/bin/openclaw \
   && chmod +x /usr/local/bin/openclaw
+
+# Avoid lazy subcommand reparse so nested options (e.g. browser cookies set --url) are parsed correctly
+ENV OPENCLAW_DISABLE_LAZY_SUBCOMMANDS=1
 
 COPY src ./src
 
