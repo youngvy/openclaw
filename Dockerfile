@@ -35,6 +35,11 @@ RUN set -eux; \
 # Patch: fix TS2345 in qmd-scope.ts (string | undefined not assignable to string) until upstream fixes it
 RUN sed -i "s/parseQmdSessionScope(key)/parseQmdSessionScope(key ?? '')/g" ./src/memory/qmd-scope.ts
 
+# Patch: fix --url option collision between browser parent command and cookies set subcommand.
+# browser inherits --url from addGatewayClientOptions which shadows cookies set's own --url;
+# enablePositionalOptions + passThroughOptions stops parent option parsing after subcommand name.
+RUN sed -i 's/\.command("browser")/\.command("browser").enablePositionalOptions().passThroughOptions()/' ./src/cli/browser-cli.ts
+
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
