@@ -222,6 +222,7 @@ async function startGateway() {
   const chromiumProc = childProcess.spawn(chromiumWrapper, [
     "--headless=new",
     "--no-sandbox",
+    `--user-data-dir=${browserDataDir}`,
     "--window-size=2560,1440",
     `--remote-debugging-port=${browserCdpPort}`,
     "--remote-debugging-address=127.0.0.1",
