@@ -35,11 +35,13 @@ RUN set -eux; \
 # Patch: fix TS2345 in qmd-scope.ts (string | undefined not assignable to string) until upstream fixes it
 RUN sed -i "s/parseQmdSessionScope(key)/parseQmdSessionScope(key ?? '')/g" ./src/memory/qmd-scope.ts
 
-# Patch: fix --url option collision between browser parent command and cookies set subcommand.
-# browser inherits --url from addGatewayClientOptions which shadows cookies set's own --url;
-# cookies (middle layer) also needs it so it doesn't split --url from its value before passing to set.
-RUN sed -i 's/\.command("browser")/\.command("browser").enablePositionalOptions()/' ./src/cli/browser-cli.ts \
-  && sed -i 's/\.command("cookies")/\.command("cookies").enablePositionalOptions()/' ./src/cli/browser-cli-state.cookies-storage.ts
+# Patch: fix --url option collision between browser parent and cookies set subcommand.
+# browser inherits --url from addGatewayClientOptions which shadows cookies set's own --url
+# during Commander's multi-level option parsing + lazy reparse. Renaming the cookie option
+# to --cookie-url (-U) avoids the collision entirely.
+RUN sed -i 's/requiredOption("--url <url>"/requiredOption("-U, --cookie-url <url>"/' ./src/cli/browser-cli-state.cookies-storage.ts \
+  && sed -i 's/url: opts\.url/url: opts.cookieUrl/' ./src/cli/browser-cli-state.cookies-storage.ts \
+  && grep -q "cookie-url" ./src/cli/browser-cli-state.cookies-storage.ts || (echo "PATCH FAILED" && exit 1)
 
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
