@@ -35,6 +35,9 @@ RUN set -eux; \
 # Patch: fix TS2345 in qmd-scope.ts (string | undefined not assignable to string) until upstream fixes it
 RUN sed -i "s/parseQmdSessionScope(key)/parseQmdSessionScope(key ?? '')/g" ./src/memory/qmd-scope.ts
 
+# Patch: browser cookies set --url not recognized (Commander requires <url> placeholder for option value)
+RUN sed -i 's/requiredOption("--url ",/requiredOption("--url <url>",/' ./src/cli/browser-cli-state.cookies-storage.ts
+
 RUN pnpm install --no-frozen-lockfile
 RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
